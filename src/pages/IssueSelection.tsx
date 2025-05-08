@@ -10,6 +10,7 @@ import { useWorkflow, Issue } from "@/contexts/WorkflowContext";
 import { useToast } from "@/hooks/use-toast";
 import { Search, Filter, Tag, AlertTriangle, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { fetchRepositoryIssues } from "@/utils/githubApi";
 
 const IssueSelection = () => {
   const navigate = useNavigate();
@@ -17,10 +18,11 @@ const IssueSelection = () => {
   const { toast } = useToast();
   
   const [searchQuery, setSearchQuery] = useState("");
+  const [issues, setIssues] = useState<Issue[]>([]);
   const [filteredIssues, setFilteredIssues] = useState<Issue[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   
-  // Mock issues data
+  // Fallback mock issues - only used if API fails
   const mockIssues: Issue[] = [
     {
       id: "issue-1",
@@ -65,20 +67,29 @@ const IssueSelection = () => {
   ];
 
   useEffect(() => {
-    // Simulate API loading
+    // Load issues from GitHub API
     const loadIssues = async () => {
       setIsLoading(true);
       try {
-        // In a real app, we would fetch issues from the GitHub API
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        setFilteredIssues(mockIssues);
+        if (repository) {
+          // Fetch real issues from GitHub API
+          const repoIssues = await fetchRepositoryIssues(repository);
+          setIssues(repoIssues);
+          setFilteredIssues(repoIssues);
+          
+          console.log("Fetched repository issues:", repoIssues);
+        }
       } catch (error) {
         console.error("Failed to load issues:", error);
         toast({
           title: "Failed to load issues",
-          description: "Could not retrieve issues from the repository.",
+          description: "Using mock issues instead. Connect with valid GitHub credentials for real data.",
           variant: "destructive",
         });
+        
+        // Fallback to mock issues on error
+        setIssues(mockIssues);
+        setFilteredIssues(mockIssues);
       } finally {
         setIsLoading(false);
       }
@@ -93,17 +104,17 @@ const IssueSelection = () => {
   
   useEffect(() => {
     if (searchQuery.trim() === "") {
-      setFilteredIssues(mockIssues);
+      setFilteredIssues(issues);
     } else {
       const query = searchQuery.toLowerCase();
-      const filtered = mockIssues.filter(issue => 
+      const filtered = issues.filter(issue => 
         issue.title.toLowerCase().includes(query) || 
         issue.body.toLowerCase().includes(query) ||
         issue.labels.some(label => label.toLowerCase().includes(query))
       );
       setFilteredIssues(filtered);
     }
-  }, [searchQuery]);
+  }, [searchQuery, issues]);
   
   const handleSelectIssue = (issue: Issue) => {
     setSelectedIssue(issue);

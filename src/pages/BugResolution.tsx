@@ -1,482 +1,320 @@
-
 import React, { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
-import { useWorkflow, WorkflowStatus } from "@/contexts/WorkflowContext";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Separator } from "@/components/ui/separator";
+import { useWorkflow } from "@/contexts/WorkflowContext";
 import { useToast } from "@/hooks/use-toast";
-import { FileCode, GitPullRequest, Check, X } from "lucide-react";
-
-// Simple mock code editor component
-const CodeEditor = ({ code, readOnly = false }: { code: string, readOnly?: boolean }) => {
-  return (
-    <pre className={`p-4 rounded-md bg-card border text-sm font-mono overflow-auto ${readOnly ? 'opacity-80' : ''}`}>
-      {code}
-    </pre>
-  );
-};
-
-// Mock dependency graph component
-const DependencyGraph = () => {
-  return (
-    <div className="w-full h-64 bg-card border rounded-md flex items-center justify-center">
-      <div className="text-center text-muted-foreground">
-        <p>Dependency Graph Visualization</p>
-        <p className="text-sm">(Using React Flow or D3.js in the final implementation)</p>
-      </div>
-    </div>
-  );
-};
+import { Loader2, CheckCircle, XCircle, AlertTriangle, FileCode, GitBranch, GitPullRequest } from "lucide-react";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 
 const BugResolution = () => {
-  const { issueId } = useParams<{ issueId: string }>();
+  const { issueId } = useParams();
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { repository, selectedIssue, steps, startWorkflow, updateStepStatus, generatedPatches, addGeneratedPatch } = useWorkflow();
-  
-  const [activeTab, setActiveTab] = useState("analysis");
-  
-  // Mock code samples
-  const mockBuggyCode = `function processUserData(user) {
-  // Bug: doesn't check if user.settings exists before accessing
-  const userPreferences = user.settings.preferences;
-  
-  if (userPreferences.theme) {
-    return {
-      theme: userPreferences.theme,
-      notifications: userPreferences.notifications || 'all'
-    };
-  }
-  
-  return {
-    theme: 'default',
-    notifications: 'all'
-  };
-}`;
+  const { 
+    repository, 
+    selectedIssue, 
+    steps, 
+    currentStep, 
+    startWorkflow, 
+    updateStepStatus,
+    generatedPatches
+  } = useWorkflow();
 
-  const mockFixedCode = `function processUserData(user) {
-  // Fixed: Added proper checks to avoid accessing undefined
-  const userSettings = user.settings || {};
-  const userPreferences = userSettings.preferences || {};
-  
-  if (userPreferences.theme) {
-    return {
-      theme: userPreferences.theme,
-      notifications: userPreferences.notifications || 'all'
-    };
-  }
-  
-  return {
-    theme: 'default',
-    notifications: 'all'
-  };
-}`;
+  const [activeTab, setActiveTab] = useState("progress");
+  const [isRunning, setIsRunning] = useState(false);
 
   useEffect(() => {
     if (!repository || !selectedIssue) {
+      toast({
+        title: "Missing information",
+        description: "Please select a repository and issue first.",
+        variant: "destructive",
+      });
       navigate("/dashboard");
-      return;
     }
+  }, [repository, selectedIssue, navigate, toast]);
+
+  // Mock function to simulate the AI workflow
+  const runWorkflow = async () => {
+    if (isRunning) return;
     
-    // Start the workflow when the component mounts
+    setIsRunning(true);
     startWorkflow();
     
-    // Simulate the workflow steps
-    const simulateWorkflow = async () => {
-      try {
-        // Repository Analysis
-        await new Promise(r => setTimeout(r, 2000));
-        updateStepStatus("repo-analysis", "success", { 
-          fileCount: 42,
-          relevantFiles: ["user.js", "settings.js", "preferences.js"]
+    // Simulate the workflow steps with delays
+    const simulateStep = async (stepId: string, success: boolean = true, delay: number = 3000) => {
+      await new Promise(resolve => setTimeout(resolve, delay));
+      
+      if (success) {
+        updateStepStatus(stepId, "success", { 
+          summary: `Successfully completed ${stepId}`,
+          details: `This is a detailed explanation of what happened during the ${stepId} step.`
         });
-        
-        // Issue Context Extraction
-        await new Promise(r => setTimeout(r, 1500));
-        updateStepStatus("issue-context", "success", {
-          issueType: "NullPointerException",
-          affectedFeature: "User Preferences",
-          commonPatterns: ["Missing null checks", "Undefined property access"]
-        });
-        
-        // Code Understanding
-        await new Promise(r => setTimeout(r, 3000));
-        updateStepStatus("code-understanding", "success", {
-          codeMap: {
-            "user.js": ["processUserData", "getUserPreferences"],
-            "settings.js": ["loadSettings", "applyTheme"]
-          },
-          dependencies: {
-            "processUserData": ["getUserPreferences", "applyTheme"]
-          }
-        });
-        
-        // Root Cause Analysis
-        await new Promise(r => setTimeout(r, 2500));
-        updateStepStatus("root-cause", "success", {
-          file: "user.js",
-          function: "processUserData",
-          line: 3,
-          issue: "Accessing properties on potentially undefined object",
-          confidence: 0.92
-        });
-        
-        // Patch Generation
-        await new Promise(r => setTimeout(r, 3000));
-        const patch = {
-          filePath: "src/user.js",
-          originalCode: mockBuggyCode,
-          modifiedCode: mockFixedCode,
-          explanation: "Added null/undefined checks to prevent accessing properties on undefined objects. This ensures the code handles cases where user.settings is not defined or doesn't have a preferences property."
-        };
-        addGeneratedPatch(patch);
-        updateStepStatus("patch-generation", "success", { patch });
-        
-        // Validation
-        await new Promise(r => setTimeout(r, 2000));
-        updateStepStatus("validation", "success", {
-          tests: [
-            { name: "Test with undefined settings", result: "pass" },
-            { name: "Test with null preferences", result: "pass" },
-            { name: "Test with complete user object", result: "pass" }
-          ],
-          staticAnalysis: "No issues found",
-          overallScore: 0.97
-        });
-        
-        // PR Integration
-        await new Promise(r => setTimeout(r, 1500));
-        updateStepStatus("integration", "success", {
-          prNumber: 143,
-          prUrl: `https://github.com/${repository?.owner}/${repository?.name}/pull/143`,
-          commits: 1,
-          changedFiles: 1
-        });
-        
-        toast({
-          title: "Bug resolution complete",
-          description: "The fix has been validated and a PR has been created.",
-        });
-      } catch (error) {
-        console.error("Workflow simulation error:", error);
-        toast({
-          title: "Workflow error",
-          description: "An error occurred during the bug resolution process.",
-          variant: "destructive",
-        });
+      } else {
+        updateStepStatus(stepId, "error", undefined, "An error occurred during this step.");
       }
     };
     
-    simulateWorkflow();
-  }, []);
-  
-  // Helper to get a step by id
-  const getStep = (id: string) => steps.find(step => step.id === id);
-  
-  const getRootCauseAnalysis = () => {
-    const step = getStep("root-cause");
-    return step?.result || null;
-  };
-  
-  const getValidationResults = () => {
-    const step = getStep("validation");
-    return step?.result || null;
-  };
-
-  const handleCreatePR = () => {
-    toast({
-      title: "Creating Pull Request",
-      description: "Submitting changes to GitHub...",
+    // Simulate each step in sequence
+    await simulateStep("repo-analysis");
+    await simulateStep("issue-context");
+    await simulateStep("code-understanding");
+    await simulateStep("root-cause");
+    
+    // Generate mock patches
+    await simulateStep("patch-generation");
+    
+    // Add mock patches
+    const mockPatches = [
+      {
+        filePath: "src/components/auth/LoginForm.js",
+        originalCode: "function validateUsername(username) {\n  return username.length >= 3;\n}",
+        modifiedCode: "function validateUsername(username) {\n  if (!username) return false;\n  return username.length >= 3 && /^[a-zA-Z0-9_-]+$/.test(username);\n}",
+        explanation: "Added null check and special character validation to prevent the login error when usernames contain special characters."
+      },
+      {
+        filePath: "src/api/authService.js",
+        originalCode: "export async function login(username, password) {\n  const response = await api.post('/auth/login', { username, password });\n  return response.data;\n}",
+        modifiedCode: "export async function login(username, password) {\n  const encodedUsername = encodeURIComponent(username);\n  const response = await api.post('/auth/login', { username: encodedUsername, password });\n  return response.data;\n}",
+        explanation: "Added URL encoding for the username to handle special characters properly when sending to the API."
+      }
+    ];
+    
+    mockPatches.forEach(patch => {
+      // In a real implementation, this would be called by the AI after generating each patch
+      // addGeneratedPatch(patch);
     });
     
-    // In a real app, this would call the GitHub API to create a PR
-    setTimeout(() => {
-      toast({
-        title: "Pull Request Created",
-        description: `PR #143 created in ${repository?.owner}/${repository?.name}`,
-      });
-    }, 1500);
+    await simulateStep("validation");
+    await simulateStep("integration");
+    
+    setIsRunning(false);
+    setActiveTab("patches");
+  };
+
+  const getStepStatusIcon = (status: string) => {
+    switch (status) {
+      case "success":
+        return <CheckCircle className="h-5 w-5 text-green-500" />;
+      case "error":
+        return <XCircle className="h-5 w-5 text-red-500" />;
+      case "progress":
+        return <Loader2 className="h-5 w-5 text-blue-500 animate-spin" />;
+      default:
+        return <div className="h-5 w-5 rounded-full border-2 border-muted" />;
+    }
   };
 
   return (
     <DashboardLayout>
-      <div className="space-y-6">
-        <div>
+      <div className="max-w-6xl mx-auto">
+        <div className="mb-8">
           <h1 className="text-3xl font-bold">Bug Resolution</h1>
-          <p className="text-muted-foreground mt-2">
-            {selectedIssue ? `Fixing issue #${selectedIssue.number}: ${selectedIssue.title}` : 'Analyzing and fixing the selected issue'}
-          </p>
+          {selectedIssue && (
+            <div className="mt-2">
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <span>Issue #{selectedIssue.number}:</span>
+                <span className="font-medium text-foreground">{selectedIssue.title}</span>
+              </div>
+              <div className="flex flex-wrap gap-2 mt-2">
+                {selectedIssue.labels.map((label, i) => (
+                  <Badge 
+                    key={i} 
+                    variant="outline"
+                    className={cn(
+                      "text-xs",
+                      label === "bug" && "bg-red-500/20 text-red-500 hover:bg-red-500/30",
+                      label.includes("priority") && "bg-amber-500/20 text-amber-500 hover:bg-amber-500/30",
+                      label === "performance" && "bg-purple-500/20 text-purple-500 hover:bg-purple-500/30"
+                    )}
+                  >
+                    {label}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
         
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <div className="flex justify-between items-center">
-            <TabsList>
-              <TabsTrigger value="analysis">Analysis</TabsTrigger>
-              <TabsTrigger value="patches">Patches</TabsTrigger>
-              <TabsTrigger value="validation">Validation</TabsTrigger>
-              <TabsTrigger value="integration">Integration</TabsTrigger>
-            </TabsList>
-            
-            <Button 
-              onClick={handleCreatePR}
-              disabled={getStep("validation")?.status !== "success"}
-            >
-              <GitPullRequest className="h-4 w-4 mr-2" />
-              Create PR
-            </Button>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-1">
+            <Card>
+              <CardHeader>
+                <CardTitle>Resolution Steps</CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                <div className="space-y-1 p-4">
+                  {steps.map((step, index) => (
+                    <div 
+                      key={step.id}
+                      className={cn(
+                        "flex items-center gap-3 p-3 rounded-md",
+                        step.status === "progress" && "bg-muted",
+                        currentStep === step.id && "bg-muted"
+                      )}
+                    >
+                      <div className="flex-shrink-0">
+                        {getStepStatusIcon(step.status)}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between">
+                          <p className="font-medium truncate">{step.name}</p>
+                          <span className="text-xs text-muted-foreground">{step.model}</span>
+                        </div>
+                        {step.status === "error" && (
+                          <p className="text-xs text-red-500 mt-1">{step.error}</p>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                
+                <div className="p-4 border-t">
+                  <Button 
+                    className="w-full" 
+                    onClick={runWorkflow}
+                    disabled={isRunning}
+                  >
+                    {isRunning ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Processing...
+                      </>
+                    ) : (
+                      <>Start Resolution</>
+                    )}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
           </div>
           
-          <div className="mt-6">
-            <TabsContent value="analysis">
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-lg">Root Cause Analysis</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    {getStep("root-cause")?.status === "progress" ? (
-                      <div className="animate-pulse space-y-4">
-                        <div className="h-4 bg-muted rounded-md w-3/4"></div>
-                        <div className="h-4 bg-muted rounded-md w-full"></div>
-                        <div className="h-4 bg-muted rounded-md w-5/6"></div>
-                      </div>
-                    ) : getRootCauseAnalysis() ? (
-                      <div className="space-y-4">
-                        <div className="grid grid-cols-2 gap-2 text-sm">
-                          <div className="text-muted-foreground">File:</div>
-                          <div>{getRootCauseAnalysis().file}</div>
-                          
-                          <div className="text-muted-foreground">Function:</div>
-                          <div>{getRootCauseAnalysis().function}</div>
-                          
-                          <div className="text-muted-foreground">Line:</div>
-                          <div>{getRootCauseAnalysis().line}</div>
-                          
-                          <div className="text-muted-foreground">Issue:</div>
-                          <div>{getRootCauseAnalysis().issue}</div>
-                          
-                          <div className="text-muted-foreground">Confidence:</div>
-                          <div>{(getRootCauseAnalysis().confidence * 100).toFixed(1)}%</div>
-                        </div>
-                        
-                        <div className="pt-4">
-                          <h4 className="text-sm font-medium mb-2">Buggy Code</h4>
-                          <CodeEditor code={mockBuggyCode} readOnly />
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="text-center py-6 text-muted-foreground">
-                        Waiting for analysis to complete...
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-                
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-lg">Code Dependencies</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <DependencyGraph />
-                    
-                    <div className="mt-6">
-                      <h4 className="text-sm font-medium mb-2">Affected Components</h4>
-                      {getStep("code-understanding")?.status === "success" ? (
-                        <ul className="text-sm space-y-1">
-                          {Object.entries(getStep("code-understanding")?.result?.codeMap || {}).map(([file, funcs], i) => (
-                            <li key={i} className="flex items-center gap-2">
-                              <FileCode className="h-4 w-4 text-muted-foreground" />
-                              <span>{file}: {Array.isArray(funcs) ? funcs.join(", ") : funcs}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <div className="animate-pulse space-y-2">
-                          {[...Array(3)].map((_, i) => (
-                            <div key={i} className="h-4 bg-muted rounded-md w-full"></div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-            </TabsContent>
-            
-            <TabsContent value="patches">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg">Generated Patch</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {generatedPatches.length > 0 ? (
-                    <div className="space-y-6">
-                      {generatedPatches.map((patch, i) => (
-                        <div key={i} className="space-y-4">
-                          <div className="text-sm">
-                            <span className="text-muted-foreground">File: </span>
-                            <span className="font-medium">{patch.filePath}</span>
+          <div className="lg:col-span-2">
+            <Tabs value={activeTab} onValueChange={setActiveTab}>
+              <TabsList className="mb-4">
+                <TabsTrigger value="progress">Analysis Progress</TabsTrigger>
+                <TabsTrigger value="patches">Generated Patches</TabsTrigger>
+                <TabsTrigger value="pr">Pull Request</TabsTrigger>
+              </TabsList>
+              
+              <TabsContent value="progress" className="space-y-4">
+                {steps.map((step) => (
+                  step.status !== "pending" && (
+                    <Card key={step.id}>
+                      <CardHeader className="pb-2">
+                        <CardTitle className="text-lg flex items-center gap-2">
+                          {getStepStatusIcon(step.status)}
+                          {step.name}
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        {step.status === "progress" ? (
+                          <div className="flex items-center gap-2 text-muted-foreground">
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            <span>Processing...</span>
                           </div>
-                          
+                        ) : step.status === "success" && step.result ? (
+                          <div>
+                            <p className="font-medium">{step.result.summary}</p>
+                            <p className="text-sm text-muted-foreground mt-2">{step.result.details}</p>
+                          </div>
+                        ) : step.status === "error" ? (
+                          <div className="text-red-500">
+                            <p>{step.error || "An error occurred during this step."}</p>
+                          </div>
+                        ) : null}
+                      </CardContent>
+                    </Card>
+                  )
+                ))}
+                
+                {steps.every(step => step.status === "pending") && (
+                  <div className="text-center py-12">
+                    <AlertTriangle className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                    <h3 className="text-lg font-medium">No Analysis Started</h3>
+                    <p className="text-muted-foreground mt-2">
+                      Click the "Start Resolution" button to begin analyzing the issue.
+                    </p>
+                  </div>
+                )}
+              </TabsContent>
+              
+              <TabsContent value="patches" className="space-y-4">
+                {generatedPatches.length > 0 ? (
+                  generatedPatches.map((patch, index) => (
+                    <Card key={index}>
+                      <CardHeader className="pb-2">
+                        <CardTitle className="text-lg flex items-center gap-2">
+                          <FileCode className="h-5 w-5 text-blue-500" />
+                          {patch.filePath}
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="space-y-4">
                           <div>
                             <h4 className="text-sm font-medium mb-2">Explanation</h4>
-                            <p className="text-sm text-muted-foreground">{patch.explanation}</p>
-                          </div>
-                          
-                          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                            <div>
-                              <h4 className="text-sm font-medium mb-2">Original Code</h4>
-                              <CodeEditor code={patch.originalCode} readOnly />
-                            </div>
-                            
-                            <div>
-                              <h4 className="text-sm font-medium mb-2">Modified Code</h4>
-                              <CodeEditor code={patch.modifiedCode} />
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : getStep("patch-generation")?.status === "progress" ? (
-                    <div className="animate-pulse space-y-4">
-                      <div className="h-4 bg-muted rounded-md w-1/2"></div>
-                      <div className="h-32 bg-muted rounded-md w-full"></div>
-                      <div className="h-4 bg-muted rounded-md w-3/4"></div>
-                    </div>
-                  ) : (
-                    <div className="text-center py-12 text-muted-foreground">
-                      Waiting for patch generation to complete...
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            </TabsContent>
-            
-            <TabsContent value="validation">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg">Patch Validation</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {getStep("validation")?.status === "success" ? (
-                    <div className="space-y-6">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="bg-accent rounded-md p-4">
-                          <h4 className="text-sm font-medium mb-3">Test Results</h4>
-                          <ul className="space-y-2">
-                            {getValidationResults().tests.map((test: any, i: number) => (
-                              <li key={i} className="flex items-center justify-between text-sm">
-                                <span>{test.name}</span>
-                                {test.result === "pass" ? (
-                                  <span className="text-status-success flex items-center">
-                                    <Check className="h-4 w-4 mr-1" /> Pass
-                                  </span>
-                                ) : (
-                                  <span className="text-status-error flex items-center">
-                                    <X className="h-4 w-4 mr-1" /> Fail
-                                  </span>
-                                )}
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                        
-                        <div className="bg-accent rounded-md p-4">
-                          <h4 className="text-sm font-medium mb-3">Static Analysis</h4>
-                          <p className="text-sm">{getValidationResults().staticAnalysis}</p>
-                          
-                          <div className="mt-6">
-                            <h4 className="text-sm font-medium mb-2">Overall Score</h4>
-                            <div className="w-full bg-muted rounded-full h-2">
-                              <div 
-                                className="bg-status-success h-2 rounded-full" 
-                                style={{ width: `${getValidationResults().overallScore * 100}%` }}
-                              />
-                            </div>
-                            <div className="text-right text-sm mt-1">
-                              {(getValidationResults().overallScore * 100).toFixed(0)}%
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ) : getStep("validation")?.status === "progress" ? (
-                    <div className="animate-pulse space-y-4">
-                      <div className="h-4 bg-muted rounded-md w-1/2"></div>
-                      <div className="h-32 bg-muted rounded-md w-full"></div>
-                      <div className="h-4 bg-muted rounded-md w-3/4"></div>
-                    </div>
-                  ) : (
-                    <div className="text-center py-12 text-muted-foreground">
-                      Waiting for validation to complete...
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            </TabsContent>
-            
-            <TabsContent value="integration">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg">Pull Request Integration</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {getStep("integration")?.status === "success" ? (
-                    <div className="space-y-6">
-                      <div className="border border-border rounded-md p-4">
-                        <div className="flex items-start justify-between">
-                          <div>
-                            <h3 className="font-medium">
-                              Fix issue #{selectedIssue?.number}: {selectedIssue?.title}
-                            </h3>
-                            <p className="text-sm text-muted-foreground mt-1">
-                              PR #{getStep("integration")?.result?.prNumber} - Created just now
+                            <p className="text-sm text-muted-foreground">
+                              {patch.explanation}
                             </p>
                           </div>
-                          <Button variant="outline" size="sm">
-                            <GitPullRequest className="h-4 w-4 mr-2" />
-                            View PR
-                          </Button>
+                          
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                              <h4 className="text-sm font-medium mb-2">Original Code</h4>
+                              <pre className="bg-muted p-3 rounded-md text-xs overflow-x-auto">
+                                {patch.originalCode}
+                              </pre>
+                            </div>
+                            <div>
+                              <h4 className="text-sm font-medium mb-2">Modified Code</h4>
+                              <pre className="bg-muted p-3 rounded-md text-xs overflow-x-auto">
+                                {patch.modifiedCode}
+                              </pre>
+                            </div>
+                          </div>
                         </div>
-                        
-                        <Separator className="my-4" />
-                        
-                        <div className="text-sm">
-                          <p className="font-medium">Changes:</p>
-                          <ul className="mt-2 space-y-1 text-muted-foreground">
-                            <li>• Modified user.js: Added null/undefined checks</li>
-                            <li>• Updated function processUserData</li>
-                          </ul>
-                        </div>
-                        
-                        <div className="mt-4 bg-muted p-3 rounded-md text-sm">
-                          <p>
-                            This PR addresses the issue where accessing properties on undefined objects
-                            causes runtime errors. The fix adds proper null checks to ensure we don't
-                            access properties on undefined objects.
-                          </p>
-                        </div>
+                      </CardContent>
+                    </Card>
+                  ))
+                ) : (
+                  <div className="text-center py-12">
+                    <FileCode className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                    <h3 className="text-lg font-medium">No Patches Generated</h3>
+                    <p className="text-muted-foreground mt-2">
+                      Complete the analysis process to generate code patches.
+                    </p>
+                  </div>
+                )}
+              </TabsContent>
+              
+              <TabsContent value="pr">
+                <Card>
+                  <CardContent className="p-6">
+                    <div className="text-center py-8">
+                      <GitPullRequest className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                      <h3 className="text-lg font-medium">Pull Request Integration</h3>
+                      <p className="text-muted-foreground mt-2 max-w-md mx-auto">
+                        After reviewing and approving the generated patches, you can create a pull request to integrate the changes.
+                      </p>
+                      
+                      <div className="mt-6">
+                        <Button disabled={generatedPatches.length === 0}>
+                          <GitBranch className="h-4 w-4 mr-2" />
+                          Create Pull Request
+                        </Button>
                       </div>
                     </div>
-                  ) : getStep("integration")?.status === "progress" ? (
-                    <div className="animate-pulse space-y-4">
-                      <div className="h-4 bg-muted rounded-md w-3/4"></div>
-                      <div className="h-4 bg-muted rounded-md w-1/2"></div>
-                      <div className="h-32 bg-muted rounded-md w-full"></div>
-                    </div>
-                  ) : (
-                    <div className="text-center py-12 text-muted-foreground">
-                      Waiting for integration to complete...
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            </TabsContent>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+            </Tabs>
           </div>
-        </Tabs>
+        </div>
       </div>
     </DashboardLayout>
   );
