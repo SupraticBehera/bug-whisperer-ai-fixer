@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -49,6 +50,126 @@ const BugResolution = () => {
     }
   }, [repository, selectedIssue, navigate, toast]);
 
+  // Enhanced function to extract code patterns from issue content
+  const extractCodePatterns = (issueContent) => {
+    if (!issueContent) return [];
+    
+    // Look for code patterns that might be mentioned in the issue
+    const patterns = [];
+    
+    // Look for special regex operators like ?: and other common patterns in the issue text
+    const regexOperators = [
+      '\\?:', '\\?\\!', '\\?=', '\\?<=', '\\?>',  // Regex non-capturing groups and lookaheads/lookbehinds
+      '\\|\\|', '&&', '===', '!==', '==', '!=',   // Logical and equality operators
+      '\\+=', '-=', '\\*=', '\\/=',               // Assignment operators
+      '\\?\\?', '\\?\\.', '\\?\\[',               // Nullish coalescing and optional chaining
+      '=>',                                       // Arrow functions
+      'async', 'await',                           // Async/await
+      'try\\s*{[\\s\\S]*?}\\s*catch',             // Try-catch blocks
+      'new\\s+[A-Z][a-zA-Z0-9_]*',                // Object instantiation
+      'function\\s*\\([^)]*\\)',                  // Function definitions
+      'import\\s+[{\\s\\w,}\\s]+from'             // Import statements
+    ];
+    
+    regexOperators.forEach(operator => {
+      const regex = new RegExp(operator, 'g');
+      if (regex.test(issueContent)) {
+        patterns.push(operator.replace(/\\/g, ''));
+      }
+    });
+    
+    // Look for variable names and function calls
+    const identifierRegex = /\b[a-zA-Z_$][a-zA-Z0-9_$]*(\.[a-zA-Z_$][a-zA-Z0-9_$]*)*\b/g;
+    const identifiers = issueContent.match(identifierRegex) || [];
+    
+    // Filter out common English words and very short identifiers
+    const commonWords = ['the', 'and', 'for', 'this', 'that', 'with', 'not', 'have', 'from'];
+    const filteredIdentifiers = identifiers.filter(id => 
+      id.length > 3 && !commonWords.includes(id.toLowerCase())
+    );
+    
+    patterns.push(...filteredIdentifiers);
+    
+    // Look for code snippets enclosed in backticks or code blocks
+    const codeBlockRegex = /```[\s\S]*?```|`[^`]+`/g;
+    const codeBlocks = issueContent.match(codeBlockRegex) || [];
+    
+    codeBlocks.forEach(block => {
+      // Clean up the code block by removing backticks and language markers
+      const cleanedBlock = block.replace(/```[\w]*\n|```|`/g, '').trim();
+      if (cleanedBlock.length > 0) {
+        patterns.push(cleanedBlock);
+      }
+    });
+    
+    // Look for specific patterns like URLs, file paths, or error messages
+    const pathRegex = /[\w/.-]+\.(js|jsx|ts|tsx|css|html|json|md)/g;
+    const paths = issueContent.match(pathRegex) || [];
+    patterns.push(...paths);
+    
+    // Look for error messages (lines containing "error" or "exception")
+    const errorRegex = /.*?(error|exception):?.*?/gi;
+    const errors = issueContent.match(errorRegex) || [];
+    patterns.push(...errors);
+    
+    // Remove duplicates
+    return [...new Set(patterns)];
+  };
+
+  // Function to find potentially buggy code in files
+  const findBuggyCode = (fileContents, patterns) => {
+    const results = [];
+    
+    Object.entries(fileContents).forEach(([filePath, content]) => {
+      if (!content) return;
+      
+      const lines = content.split('\n');
+      
+      // Check each pattern against file content
+      patterns.forEach(pattern => {
+        // Skip very short patterns to avoid false positives
+        if (pattern.length < 3) return;
+        
+        // Convert the pattern to a regex-safe string
+        const safePattern = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const regex = new RegExp(safePattern, 'i');
+        
+        // Check if the pattern exists in the file
+        if (regex.test(content)) {
+          // Find the matching line number(s)
+          for (let i = 0; i < lines.length; i++) {
+            if (regex.test(lines[i])) {
+              // Get context lines
+              const startLine = Math.max(0, i - 5);
+              const endLine = Math.min(lines.length, i + 10);
+              const contextCode = lines.slice(startLine, endLine).join('\n');
+              
+              results.push({
+                filePath,
+                lineStart: startLine + 1,
+                lineEnd: endLine,
+                matchingLine: i + 1,
+                code: contextCode,
+                pattern
+              });
+              
+              // Only report the first few matches per file per pattern
+              if (results.length > 20) break;
+            }
+          }
+        }
+      });
+    });
+    
+    // Sort results by number of times a file appears (files with more matches are likely more relevant)
+    const fileCounts = {};
+    results.forEach(result => {
+      fileCounts[result.filePath] = (fileCounts[result.filePath] || 0) + 1;
+    });
+    
+    return results.sort((a, b) => fileCounts[b.filePath] - fileCounts[a.filePath]);
+  };
+
   // New function to search for relevant files in the repository
   const searchRepositoryFiles = async () => {
     if (!repository || !selectedIssue) return;
@@ -79,6 +200,62 @@ const BugResolution = () => {
     }
   };
 
+  // Function to analyze code and identify potential issues
+  const analyzeCode = (fileContents, buggyCodeResults) => {
+    if (!buggyCodeResults || buggyCodeResults.length === 0) return null;
+    
+    // Find the most likely buggy file (one with the most pattern matches)
+    const fileCounts = {};
+    buggyCodeResults.forEach(result => {
+      fileCounts[result.filePath] = (fileCounts[result.filePath] || 0) + 1;
+    });
+    
+    const mostLikelyBuggyFilePath = Object.keys(fileCounts).reduce((a, b) => 
+      fileCounts[a] > fileCounts[b] ? a : b, Object.keys(fileCounts)[0]);
+    
+    // Get all results for this file
+    const fileResults = buggyCodeResults.filter(r => r.filePath === mostLikelyBuggyFilePath);
+    
+    // Extract functions from the buggy file
+    const buggyFileContent = fileContents[mostLikelyBuggyFilePath] || "";
+    const functions = extractFunctions(buggyFileContent);
+    
+    // Try to identify which function contains the buggy code
+    let buggyFunction = null;
+    
+    for (const result of fileResults) {
+      for (const func of functions) {
+        // Check if the buggy line falls within this function's range
+        const funcLines = func.code.split('\n').length;
+        const funcEndLine = func.lineStart + funcLines - 1;
+        
+        if (result.matchingLine >= func.lineStart && result.matchingLine <= funcEndLine) {
+          buggyFunction = func;
+          break;
+        }
+      }
+      
+      if (buggyFunction) break;
+    }
+    
+    // If we couldn't identify a specific function, use the file's most suspicious code segment
+    if (!buggyFunction && fileResults.length > 0) {
+      const suspiciousResult = fileResults[0];
+      buggyFunction = {
+        name: "unknown",
+        code: suspiciousResult.code,
+        lineStart: suspiciousResult.lineStart,
+        params: ""
+      };
+    }
+    
+    return {
+      filePath: mostLikelyBuggyFilePath,
+      function: buggyFunction,
+      matches: fileResults
+    };
+  };
+
   // Enhanced workflow simulation with dynamic code analysis
   const runWorkflow = async () => {
     if (isRunning) return;
@@ -88,7 +265,20 @@ const BugResolution = () => {
     
     // Start by searching for relevant files
     const fileContents = await searchRepositoryFiles();
+    if (!fileContents || Object.keys(fileContents).length === 0) {
+      updateStepStatus("repo-analysis", "error", undefined, "Failed to analyze repository files");
+      setIsRunning(false);
+      return;
+    }
+    
     const filePaths = Object.keys(fileContents);
+    
+    // Extract code patterns from the issue
+    const issueContent = `${selectedIssue?.title || ''} ${selectedIssue?.body || ''}`;
+    const codePatterns = extractCodePatterns(issueContent);
+    
+    // Find potentially buggy code based on the patterns
+    const buggyCodeResults = findBuggyCode(fileContents, codePatterns);
     
     // Simulate the workflow steps with dynamic file analysis
     const simulateStep = async (
@@ -112,92 +302,103 @@ const BugResolution = () => {
     // Repository Analysis
     await simulateStep("repo-analysis", true, 3000, {
       summary: "Repository structure analyzed successfully",
-      details: "Identified key source files and dependencies relevant to the issue.",
+      details: `Analyzed ${filePaths.length} files and identified ${codePatterns.length} patterns from the issue description.`,
       analyzedFiles: filePaths,
       codeSnippets: filePaths.slice(0, 2).map(filePath => ({
         filePath,
-        code: fileContents[filePath].substring(0, 200) + "...",
+        code: fileContents[filePath]?.substring(0, 200) + "..." || "File not found",
         lineStart: 1,
-        lineEnd: fileContents[filePath].split('\n').length > 10 ? 10 : fileContents[filePath].split('\n').length
+        lineEnd: fileContents[filePath]?.split('\n').length > 10 ? 10 : (fileContents[filePath]?.split('\n').length || 0)
       }))
     });
 
     // Issue Context Extraction
+    const topBuggyResults = buggyCodeResults.slice(0, 3);
     await simulateStep("issue-context", true, 2500, {
-      summary: "Issue context extracted from description and comments",
-      details: `Issue #${selectedIssue?.number}: ${selectedIssue?.title}. ${selectedIssue?.body.substring(0, 200)}...`,
+      summary: `Identified ${buggyCodeResults.length} potential code segments related to the issue`,
+      details: `Issue #${selectedIssue?.number}: ${selectedIssue?.title}. Found patterns: ${codePatterns.slice(0, 5).join(', ')}${codePatterns.length > 5 ? '...' : ''}`,
       analyzedFiles: filePaths,
-      codeSnippets: filePaths.slice(0, 3).map(filePath => {
-        const content = fileContents[filePath];
-        // Find a section in the code that might match keywords from the issue
-        const issueKeywords = selectedIssue?.title.split(" ") || [];
-        let matchingLine = 1;
-        let matchingCode = content;
-        
-        // Simple approach to find potentially relevant code section
-        const lines = content.split('\n');
-        for (let i = 0; i < lines.length; i++) {
-          const line = lines[i].toLowerCase();
-          if (issueKeywords.some(kw => kw.length > 3 && line.includes(kw.toLowerCase()))) {
-            matchingLine = i + 1;
-            // Get a few lines before and after for context
-            const startLine = Math.max(0, i - 5);
-            const endLine = Math.min(lines.length, i + 10);
-            matchingCode = lines.slice(startLine, endLine).join('\n');
-            break;
-          }
-        }
-        
-        return {
-          filePath,
-          code: matchingCode,
-          lineStart: matchingLine,
-          lineEnd: matchingLine + matchingCode.split('\n').length - 1
-        };
-      })
+      codeSnippets: topBuggyResults.map(result => ({
+        filePath: result.filePath,
+        code: result.code,
+        lineStart: result.lineStart,
+        lineEnd: result.lineEnd
+      }))
     });
 
     // Code Understanding
-    const errorFile = filePaths[0]; // For simulation, we'll assume the first file has the issue
+    const analyzedIssue = analyzeCode(fileContents, buggyCodeResults);
+    if (!analyzedIssue) {
+      updateStepStatus("code-understanding", "error", undefined, "Failed to analyze code structure");
+      setIsRunning(false);
+      return;
+    }
+    
     await simulateStep("code-understanding", true, 4000, {
       summary: "Code structure and relationships analyzed",
-      details: "The code has been analyzed for patterns that could lead to the reported issue. Found potential issues in error handling and validation logic.",
+      details: `The most likely location of the bug is in file ${analyzedIssue.filePath}${analyzedIssue.function?.name !== "unknown" ? ` in the ${analyzedIssue.function.name} function` : ''}.`,
       analyzedFiles: filePaths,
       codeSnippets: [
         {
-          filePath: errorFile,
-          code: fileContents[errorFile].substring(0, 500),
-          lineStart: 1,
-          lineEnd: 20
+          filePath: analyzedIssue.filePath,
+          code: analyzedIssue.function?.code || fileContents[analyzedIssue.filePath]?.substring(0, 500) || "",
+          lineStart: analyzedIssue.function?.lineStart || 1,
+          lineEnd: analyzedIssue.function?.lineStart + (analyzedIssue.function?.code?.split('\n').length || 20) - 1
         }
       ],
       relatedFiles: await Promise.all(filePaths.slice(0, 3).map(async (filePath) => {
         // For each file, also get potential related files
         const relatedFiles = await findRelatedFiles(repository, filePath);
-        return relatedFiles[0] || { path: filePath, content: fileContents[filePath] };
+        return relatedFiles[0] || { path: filePath, content: fileContents[filePath] || "" };
       }))
     });
 
-    // Find a function or code block in the first file that might contain a bug
-    const errorFileContent = fileContents[errorFile] || "";
-    const errorFileFunctions = extractFunctions(errorFileContent);
-    const potentialBuggyFunction = errorFileFunctions.length > 0 ? 
-      errorFileFunctions[0] : 
-      { name: "main", code: errorFileContent.substring(0, 200), lineStart: 1 };
-
-    // Root Cause Analysis  
+    // Root Cause Analysis
+    const buggyFunction = analyzedIssue.function;
+    const buggyFilePath = analyzedIssue.filePath;
+    
+    // Generate a potential root cause based on the patterns and code
+    let rootCauseDescription = "The issue appears to be ";
+    const codeContainsRegex = buggyFunction?.code?.includes("?:") || buggyCodeResults.some(r => r.pattern === "?:");
+    const codeContainsTryCatch = buggyFunction?.code?.includes("try") && buggyFunction?.code?.includes("catch");
+    const codeContainsAsyncAwait = buggyFunction?.code?.includes("async") && buggyFunction?.code?.includes("await");
+    
+    if (codeContainsRegex) {
+      rootCauseDescription += "related to incorrect usage of regular expression non-capturing groups (?:). ";
+    } else if (codeContainsTryCatch) {
+      rootCauseDescription += "in the error handling logic. The try-catch block might not be properly catching or processing errors. ";
+    } else if (codeContainsAsyncAwait) {
+      rootCauseDescription += "related to async/await usage. Promises might not be properly handled or awaited. ";
+    } else {
+      rootCauseDescription += "related to data validation or processing logic. ";
+    }
+    
+    rootCauseDescription += `The issue is located in the ${buggyFilePath} file${buggyFunction?.name !== "unknown" ? ` in the ${buggyFunction.name} function` : ''}.`;
+    
+    // Generate a potential solution description
+    let solutionDescription = "To fix this issue, ";
+    if (codeContainsRegex) {
+      solutionDescription += "ensure that the regular expression pattern is correctly formed. Non-capturing groups (?:) should be properly formatted.";
+    } else if (codeContainsTryCatch) {
+      solutionDescription += "improve the error handling logic to properly catch and process all potential errors.";
+    } else if (codeContainsAsyncAwait) {
+      solutionDescription += "ensure all async operations are properly awaited and error handling is in place for promises.";
+    } else {
+      solutionDescription += "add proper validation checks and handle edge cases in the data processing logic.";
+    }
+  
     await simulateStep("root-cause", true, 5000, {
-      summary: "Root cause identified: Issue in error handling logic",
-      details: `After analyzing the codebase, the root cause appears to be in the ${potentialBuggyFunction.name} function where error conditions are not properly handled.`,
-      rootCause: `The issue is in ${errorFile} in the ${potentialBuggyFunction.name} function. It does not properly validate input parameters, which could lead to unexpected behavior.`,
-      solution: `Modify the ${potentialBuggyFunction.name} function to include proper validation checks and error handling logic.`,
+      summary: `Root cause identified in ${buggyFilePath}`,
+      details: `After analyzing the codebase, the most likely location of the issue has been identified.`,
+      rootCause: rootCauseDescription,
+      solution: solutionDescription,
       analyzedFiles: filePaths,
       codeSnippets: [
         {
-          filePath: errorFile,
-          code: potentialBuggyFunction.code,
-          lineStart: potentialBuggyFunction.lineStart,
-          lineEnd: potentialBuggyFunction.lineStart + potentialBuggyFunction.code.split('\n').length,
+          filePath: buggyFilePath,
+          code: buggyFunction?.code || "",
+          lineStart: buggyFunction?.lineStart || 1,
+          lineEnd: (buggyFunction?.lineStart || 1) + (buggyFunction?.code?.split('\n').length || 1),
           isError: true
         }
       ]
@@ -207,16 +408,16 @@ const BugResolution = () => {
     await simulateStep("patch-generation", true, 4000);
     
     // Generate a realistic patch for the identified issue
-    const originalCode = potentialBuggyFunction.code;
-    const modifiedCode = generatePatch(originalCode, potentialBuggyFunction.name);
+    const originalCode = buggyFunction?.code || "";
+    const modifiedCode = generatePatch(originalCode, buggyFunction?.name || "unknown", codeContainsRegex, codeContainsTryCatch, codeContainsAsyncAwait);
     
     // Add the patch
     const patch = {
-      filePath: errorFile,
+      filePath: buggyFilePath,
       originalCode,
       modifiedCode,
-      explanation: `Added proper input validation and error handling to the ${potentialBuggyFunction.name} function to address the reported issue.`,
-      impactedFiles: findImpactedFiles(filePaths, potentialBuggyFunction.name, 2)
+      explanation: generateExplanation(codeContainsRegex, codeContainsTryCatch, codeContainsAsyncAwait, buggyFunction?.name || "unknown"),
+      impactedFiles: findImpactedFiles(filePaths, buggyFunction?.name || "unknown", fileContents)
     };
     
     addGeneratedPatch(patch);
@@ -231,9 +432,9 @@ const BugResolution = () => {
         const relatedPatch = {
           filePath: relatedFile,
           originalCode: relatedFunctions[0].code,
-          modifiedCode: generateRelatedPatch(relatedFunctions[0].code),
-          explanation: `Updated related code to accommodate changes in the ${potentialBuggyFunction.name} function.`,
-          impactedFiles: [errorFile]
+          modifiedCode: generateRelatedPatch(relatedFunctions[0].code, buggyFunction?.name || "unknown"),
+          explanation: `Updated related code to accommodate changes in the ${buggyFunction?.name || "affected"} function.`,
+          impactedFiles: [buggyFilePath]
         };
         
         addGeneratedPatch(relatedPatch);
@@ -242,11 +443,11 @@ const BugResolution = () => {
     
     await simulateStep("validation", true, 3000, {
       summary: "Patches validated for correctness",
-      details: "The proposed changes properly address the issue by adding appropriate validation and error handling. Test cases confirm the fix resolves the reported behavior.",
+      details: "The proposed changes properly address the issue. Test cases confirm the fix resolves the reported behavior.",
       codeSnippets: [
         {
-          filePath: errorFile,
-          code: `// Test for the fixed function\nconst testResult = ${potentialBuggyFunction.name}('test');\nconsole.assert(testResult === 'expected result', 'Function should return expected result');`,
+          filePath: buggyFilePath,
+          code: `// Test for the fixed function\nconst testResult = ${buggyFunction?.name !== "unknown" ? buggyFunction?.name : 'fixedFunction'}('test');\nconsole.assert(testResult === 'expected result', 'Function should return expected result');`,
           lineStart: 1,
           lineEnd: 3
         }
@@ -259,8 +460,23 @@ const BugResolution = () => {
     setActiveTab("patches");
   };
 
+  // Generate a more detailed explanation based on the issue type
+  const generateExplanation = (isRegexIssue, isTryCatchIssue, isAsyncIssue, functionName) => {
+    if (isRegexIssue) {
+      return `Fixed incorrect regular expression pattern in the ${functionName} function. The non-capturing group syntax (?:) was either malformed or improperly used, which was causing the regex to fail or behave unexpectedly.`;
+    } else if (isTryCatchIssue) {
+      return `Enhanced error handling in the ${functionName} function by improving the try-catch block to properly handle all potential exceptions and provide better error messages for debugging.`;
+    } else if (isAsyncIssue) {
+      return `Fixed async/await implementation in the ${functionName} function to ensure all promises are properly awaited and rejected promises are handled correctly.`;
+    } else {
+      return `Added proper validation and error handling to the ${functionName} function to address edge cases and prevent unexpected behavior.`;
+    }
+  };
+
   // Helper function to extract functions from code content
   const extractFunctions = (content: string) => {
+    if (!content) return [];
+    
     const functionRegex = /(?:function\s+(\w+)|const\s+(\w+)\s*=\s*(?:function|\([^)]*\)\s*=>))\s*\(([^)]*)\)[^{]*{([^}]*)}/g;
     const functions = [];
     let match;
@@ -280,12 +496,67 @@ const BugResolution = () => {
       });
     }
     
+    // If no functions were found with the regex, try a more permissive approach
+    if (functions.length === 0) {
+      // Look for any curly-brace block that might be a function
+      const blockRegex = /(\w+)\s*\([^)]*\)\s*{([^{}]*(?:{[^{}]*}[^{}]*)*)}/g;
+      while ((match = blockRegex.exec(content)) !== null) {
+        const name = match[1];
+        const body = match[2];
+        const fullFunction = match[0];
+        const lineStart = content.substring(0, match.index).split('\n').length;
+        
+        functions.push({
+          name,
+          params: "",
+          code: fullFunction,
+          lineStart
+        });
+      }
+    }
+    
     return functions;
   };
   
   // Helper function to generate a realistic patch for the identified issue
-  const generatePatch = (originalCode: string, functionName: string) => {
+  const generatePatch = (originalCode: string, functionName: string, isRegexIssue: boolean, isTryCatchIssue: boolean, isAsyncIssue: boolean) => {
+    if (!originalCode) return "// No code to patch";
+    
     // This is a simplified example - in a real implementation, an AI model would generate the patch
+    if (isRegexIssue) {
+      // Fix regex non-capturing group issues
+      return originalCode.replace(
+        /(\(\?:)/g, 
+        `// Fixed regex non-capturing group syntax
+$1`
+      );
+    } else if (isTryCatchIssue) {
+      // Improve try/catch logic
+      if (originalCode.includes('try')) {
+        return originalCode.replace(
+          /try\s*{([^}]*)}\s*catch\s*\(([^)]*)\)\s*{([^}]*)}/g,
+          `try {$1
+  // Added additional error logging
+} catch ($2) {
+  console.error(\`Error in ${functionName}: \${$2.message}\`);$3
+  // Make sure to properly handle or rethrow the error
+  throw $2;
+}`
+        );
+      }
+    } else if (isAsyncIssue) {
+      // Fix async/await issues
+      if (originalCode.includes('async')) {
+        return originalCode.replace(
+          /async\s+function\s+(\w+)\s*\(([^)]*)\)\s*{/g,
+          `async function $1($2) {
+  // Added proper error handling for async function
+  try {`
+        ) + "\n} catch (error) {\n  console.error(`Async error in " + functionName + ": ${error.message}`);\n  throw error;\n}\n}";
+      }
+    }
+    
+    // If we can't identify a specific pattern to fix, add a basic validation
     if (originalCode.includes('if (') && !originalCode.includes('throw')) {
       // Add error handling to an existing if statement
       return originalCode.replace(
@@ -296,22 +567,9 @@ const BugResolution = () => {
     throw new Error("Invalid input provided to ${functionName}");
   }`
       );
-    } else if (!originalCode.includes('try')) {
-      // Add try/catch logic
-      const lines = originalCode.split('\n');
-      const openingBraceIndex = lines.findIndex(line => line.includes('{'));
-      if (openingBraceIndex >= 0) {
-        lines.splice(openingBraceIndex + 1, 0, '  try {');
-        lines.push(`  } catch (error) {
-    console.error(\`Error in ${functionName}: \${error.message}\`);
-    throw error;
-  }`);
-        return lines.join('\n');
-      }
-    }
-    
-    // If we can't identify a specific pattern to fix, add a basic validation
-    return `// Added input validation
+    } else {
+      // Add general validation
+      return `// Added input validation
 function isValid(input) {
   return input !== null && input !== undefined && input !== '';
 }
@@ -320,22 +578,48 @@ ${originalCode.replace(
   /(\w+)\s*\(([^)]*)\)/,
   '$1($2) {\n  if (!isValid($2)) {\n    throw new Error("Invalid input");\n  }'
 )}`;
+    }
   };
   
   // Helper function to generate patches for related files
-  const generateRelatedPatch = (originalCode: string) => {
+  const generateRelatedPatch = (originalCode: string, referencedFunctionName: string) => {
+    if (!originalCode) return "// No code to patch";
+    
     // This is a simplified example - in a real implementation, an AI model would generate the patch
-    return originalCode.replace(
-      /(\w+)\(([^)]*)\)/g,
-      '$1($2) // Make sure to handle potential errors from this call'
-    );
+    if (originalCode.includes(referencedFunctionName)) {
+      // Update calls to the referenced function
+      return originalCode.replace(
+        new RegExp(`(${referencedFunctionName})\\(([^)]*)\\)`, 'g'),
+        `// Updated to handle errors from ${referencedFunctionName}
+try {
+  $1($2)
+} catch (error) {
+  console.error(\`Error calling ${referencedFunctionName}: \${error.message}\`);
+  // Handle the error appropriately
+}`
+      );
+    } else {
+      // General update for error handling
+      return originalCode.replace(
+        /(\w+)\(([^)]*)\)/g,
+        '$1($2) // Make sure to handle potential errors from this call'
+      );
+    }
   };
   
   // Helper function to find potentially impacted files
-  const findImpactedFiles = (filePaths: string[], functionName: string, count: number) => {
-    // In a real implementation, we would analyze imports and function calls
-    // Here we're just returning a subset of the files for demonstration
-    return filePaths.slice(1, count + 1);
+  const findImpactedFiles = (filePaths: string[], functionName: string, fileContents: Record<string, string>) => {
+    // Look for files that might reference the function
+    const impactedFiles = [];
+    
+    for (const filePath of filePaths) {
+      const content = fileContents[filePath];
+      if (content && functionName !== "unknown" && content.includes(functionName) && impactedFiles.length < 3) {
+        impactedFiles.push(filePath);
+      }
+    }
+    
+    return impactedFiles;
   };
 
   const getStepStatusIcon = (status: string) => {

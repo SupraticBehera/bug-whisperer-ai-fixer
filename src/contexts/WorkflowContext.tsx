@@ -15,7 +15,7 @@ export interface WorkflowStep {
     relatedFiles?: CodeFile[];
     rootCause?: string;
     solution?: string;
-    analyzedFiles?: string[]; // New: Files analyzed during this step
+    analyzedFiles?: string[]; // Files analyzed during this step
   };
   error?: string;
 }
@@ -63,7 +63,7 @@ interface WorkflowContextType {
   repository: Repository | null;
   selectedIssue: Issue | null;
   generatedPatches: CodePatch[];
-  analyzedFiles: Record<string, string>; // New: To store repository files content
+  analyzedFiles: Record<string, string>; // To store repository files content
   setRepository: (repo: Repository) => void;
   setSelectedIssue: (issue: Issue) => void;
   startWorkflow: () => void;
@@ -71,8 +71,9 @@ interface WorkflowContextType {
   updateStepStatus: (stepId: string, status: WorkflowStatus, result?: any, error?: string) => void;
   addGeneratedPatch: (patch: CodePatch) => void;
   resetWorkflow: () => void;
-  addAnalyzedFile: (filePath: string, content: string) => void; // New: Add a file to analyzed files
-  addManyAnalyzedFiles: (files: Record<string, string>) => void; // New: Add multiple files
+  addAnalyzedFile: (filePath: string, content: string) => void; // Add a file to analyzed files
+  addManyAnalyzedFiles: (files: Record<string, string>) => void; // Add multiple files
+  getAnalyzedFileByPattern: (pattern: string) => CodeFile[]; // New: Search analyzed files by pattern
 }
 
 const initialSteps: WorkflowStep[] = [
@@ -101,6 +102,7 @@ const WorkflowContext = createContext<WorkflowContextType>({
   resetWorkflow: () => {},
   addAnalyzedFile: () => {},
   addManyAnalyzedFiles: () => {},
+  getAnalyzedFileByPattern: () => [], // New default implementation
 });
 
 export const useWorkflow = () => useContext(WorkflowContext);
@@ -177,6 +179,23 @@ export const WorkflowProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }));
   };
 
+  // New method to search analyzed files by pattern
+  const getAnalyzedFileByPattern = (pattern: string): CodeFile[] => {
+    const results: CodeFile[] = [];
+    
+    // Search through all analyzed files for the pattern
+    Object.entries(analyzedFiles).forEach(([path, content]) => {
+      if (content.includes(pattern)) {
+        results.push({
+          path,
+          content
+        });
+      }
+    });
+    
+    return results;
+  };
+
   return (
     <WorkflowContext.Provider
       value={{
@@ -195,6 +214,7 @@ export const WorkflowProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         resetWorkflow,
         addAnalyzedFile,
         addManyAnalyzedFiles,
+        getAnalyzedFileByPattern, // Add the new method
       }}
     >
       {children}
