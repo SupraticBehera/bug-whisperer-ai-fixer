@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -16,6 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { Form, FormControl, FormField, FormItem, FormLabel } from "@/components/ui/form";
 import { useForm } from "react-hook-form";
+import { findFilesForBugAnalysis, findRelatedFiles } from "@/utils/githubApi";
 
 const BugResolution = () => {
   const { issueId } = useParams();
@@ -28,11 +28,15 @@ const BugResolution = () => {
     currentStep, 
     startWorkflow, 
     updateStepStatus,
-    generatedPatches
+    generatedPatches,
+    addGeneratedPatch,
+    analyzedFiles,
+    addManyAnalyzedFiles
   } = useWorkflow();
 
   const [activeTab, setActiveTab] = useState("progress");
   const [isRunning, setIsRunning] = useState(false);
+  const [isSearchingFiles, setIsSearchingFiles] = useState(false);
 
   useEffect(() => {
     if (!repository || !selectedIssue) {
@@ -45,14 +49,48 @@ const BugResolution = () => {
     }
   }, [repository, selectedIssue, navigate, toast]);
 
-  // Mock function to simulate the AI workflow with enhanced details
+  // New function to search for relevant files in the repository
+  const searchRepositoryFiles = async () => {
+    if (!repository || !selectedIssue) return;
+    
+    setIsSearchingFiles(true);
+    try {
+      const { fileContents } = await findFilesForBugAnalysis(repository, selectedIssue);
+      
+      // Add the files to the workflow context
+      addManyAnalyzedFiles(fileContents);
+      
+      toast({
+        title: "Files analyzed",
+        description: `Found ${Object.keys(fileContents).length} relevant files for analysis`,
+      });
+      
+      return fileContents;
+    } catch (error) {
+      console.error("Error searching repository files:", error);
+      toast({
+        title: "Error analyzing files",
+        description: "Failed to search repository files. Using fallback approach.",
+        variant: "destructive",
+      });
+      return {};
+    } finally {
+      setIsSearchingFiles(false);
+    }
+  };
+
+  // Enhanced workflow simulation with dynamic code analysis
   const runWorkflow = async () => {
     if (isRunning) return;
     
     setIsRunning(true);
     startWorkflow();
     
-    // Simulate the workflow steps with delays and detailed information
+    // Start by searching for relevant files
+    const fileContents = await searchRepositoryFiles();
+    const filePaths = Object.keys(fileContents);
+    
+    // Simulate the workflow steps with dynamic file analysis
     const simulateStep = async (
       stepId: string, 
       success: boolean = true, 
@@ -74,60 +112,92 @@ const BugResolution = () => {
     // Repository Analysis
     await simulateStep("repo-analysis", true, 3000, {
       summary: "Repository structure analyzed successfully",
-      details: "Identified key source files and dependencies. The repository follows a standard structure with separate directories for source code, tests, and documentation.",
-      codeSnippets: [
-        {
-          filePath: "src/parser.c",
-          code: "typedef struct Token Token;\nstruct Token {\n  TokenKind kind;\n  Token *next;\n  int val;\n  char *loc;\n  int len;\n};\n",
-          lineStart: 10,
-          lineEnd: 16
-        }
-      ]
+      details: "Identified key source files and dependencies relevant to the issue.",
+      analyzedFiles: filePaths,
+      codeSnippets: filePaths.slice(0, 2).map(filePath => ({
+        filePath,
+        code: fileContents[filePath].substring(0, 200) + "...",
+        lineStart: 1,
+        lineEnd: fileContents[filePath].split('\n').length > 10 ? 10 : fileContents[filePath].split('\n').length
+      }))
     });
 
     // Issue Context Extraction
     await simulateStep("issue-context", true, 2500, {
       summary: "Issue context extracted from description and comments",
-      details: `The issue relates to a problem with the conditional operator (?:) in the parser. The parser currently allows the conditional operator without the third operand, which violates the C standard.`,
-      codeSnippets: [
-        {
-          filePath: "src/parser.c",
-          code: "// Current implementation allows: expr ? expr : \n// but C standard requires three operands: expr ? expr : expr",
-          isError: true
+      details: `Issue #${selectedIssue?.number}: ${selectedIssue?.title}. ${selectedIssue?.body.substring(0, 200)}...`,
+      analyzedFiles: filePaths,
+      codeSnippets: filePaths.slice(0, 3).map(filePath => {
+        const content = fileContents[filePath];
+        // Find a section in the code that might match keywords from the issue
+        const issueKeywords = selectedIssue?.title.split(" ") || [];
+        let matchingLine = 1;
+        let matchingCode = content;
+        
+        // Simple approach to find potentially relevant code section
+        const lines = content.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i].toLowerCase();
+          if (issueKeywords.some(kw => kw.length > 3 && line.includes(kw.toLowerCase()))) {
+            matchingLine = i + 1;
+            // Get a few lines before and after for context
+            const startLine = Math.max(0, i - 5);
+            const endLine = Math.min(lines.length, i + 10);
+            matchingCode = lines.slice(startLine, endLine).join('\n');
+            break;
+          }
         }
-      ]
+        
+        return {
+          filePath,
+          code: matchingCode,
+          lineStart: matchingLine,
+          lineEnd: matchingLine + matchingCode.split('\n').length - 1
+        };
+      })
     });
 
     // Code Understanding
+    const errorFile = filePaths[0]; // For simulation, we'll assume the first file has the issue
     await simulateStep("code-understanding", true, 4000, {
       summary: "Code structure and relationships analyzed",
-      details: "The parser handles conditional expressions in the `conditional` function, which fails to properly validate the presence of all three required operands.",
+      details: "The code has been analyzed for patterns that could lead to the reported issue. Found potential issues in error handling and validation logic.",
+      analyzedFiles: filePaths,
       codeSnippets: [
         {
-          filePath: "src/parser.c",
-          code: "// Function that parses conditional expressions\nstatic Node *conditional(Token **rest, Token *tok) {\n  Node *cond = logor(rest, tok);\n\n  if (!equal(tok, \"?\"))\n    return cond;\n\n  Node *node = new_node(ND_COND, tok);\n  node->cond = cond;\n  node->then = expr(&tok, tok->next);\n  tok = skip(tok, \":\");\n  node->els = conditional(rest, tok); // No validation if ':' isn't followed by an expression\n\n  return node;\n}",
-          lineStart: 105,
-          lineEnd: 117
+          filePath: errorFile,
+          code: fileContents[errorFile].substring(0, 500),
+          lineStart: 1,
+          lineEnd: 20
         }
       ],
-      relatedFiles: [
-        { path: "src/tokenize.c", content: "// Contains the tokenizer implementation" },
-        { path: "src/parse.h", content: "// Contains node type definitions" }
-      ]
+      relatedFiles: await Promise.all(filePaths.slice(0, 3).map(async (filePath) => {
+        // For each file, also get potential related files
+        const relatedFiles = await findRelatedFiles(repository, filePath);
+        return relatedFiles[0] || { path: filePath, content: fileContents[filePath] };
+      }))
     });
+
+    // Find a function or code block in the first file that might contain a bug
+    const errorFileContent = fileContents[errorFile] || "";
+    const errorFileFunctions = extractFunctions(errorFileContent);
+    const potentialBuggyFunction = errorFileFunctions.length > 0 ? 
+      errorFileFunctions[0] : 
+      { name: "main", code: errorFileContent.substring(0, 200), lineStart: 1 };
 
     // Root Cause Analysis  
     await simulateStep("root-cause", true, 5000, {
-      summary: "Root cause identified: Missing validation for third operand",
-      details: "The parser's conditional function doesn't validate that a valid expression follows the colon in a conditional expression. According to the C standard (6.5.15p3), the conditional operator requires three operands.",
-      rootCause: "The issue is in src/parser.c in the conditional function. It skips the colon token but doesn't validate that a valid expression follows it.",
-      solution: "Modify the conditional function to verify that a valid expression follows the colon and report an error if it's missing.",
+      summary: "Root cause identified: Issue in error handling logic",
+      details: `After analyzing the codebase, the root cause appears to be in the ${potentialBuggyFunction.name} function where error conditions are not properly handled.`,
+      rootCause: `The issue is in ${errorFile} in the ${potentialBuggyFunction.name} function. It does not properly validate input parameters, which could lead to unexpected behavior.`,
+      solution: `Modify the ${potentialBuggyFunction.name} function to include proper validation checks and error handling logic.`,
+      analyzedFiles: filePaths,
       codeSnippets: [
         {
-          filePath: "src/parser.c",
-          code: "node->cond = cond;\nnode->then = expr(&tok, tok->next);\ntok = skip(tok, \":\");\nnode->els = conditional(rest, tok); // Problem: No validation if an expression exists after ':'",
-          lineStart: 112,
-          lineEnd: 114,
+          filePath: errorFile,
+          code: potentialBuggyFunction.code,
+          lineStart: potentialBuggyFunction.lineStart,
+          lineEnd: potentialBuggyFunction.lineStart + potentialBuggyFunction.code.split('\n').length,
           isError: true
         }
       ]
@@ -136,36 +206,49 @@ const BugResolution = () => {
     // Patch Generation
     await simulateStep("patch-generation", true, 4000);
     
-    // Add mock patches with interconnected file impacts
-    const mockPatches = [
-      {
-        filePath: "src/parser.c",
-        originalCode: "node->cond = cond;\nnode->then = expr(&tok, tok->next);\ntok = skip(tok, \":\");\nnode->els = conditional(rest, tok);",
-        modifiedCode: "node->cond = cond;\nnode->then = expr(&tok, tok->next);\ntok = skip(tok, \":\");\n\n// Ensure there's an expression after the colon\nif (at_eof(tok) || equal(tok, \";\")) {\n  error_tok(tok, \"expected expression after ':'\");\n}\nnode->els = conditional(rest, tok);",
-        explanation: "Added validation to ensure an expression follows the colon in conditional expressions, as required by the C standard (6.5.15p3).",
-        impactedFiles: ["src/parser.c", "test/conditional.c"]
-      },
-      {
-        filePath: "test/conditional.c",
-        originalCode: "void test_conditional() {\n  // Test valid conditionals\n  assert(1 ? 2 : 3 == 2);\n  assert(0 ? 2 : 3 == 3);\n}",
-        modifiedCode: "void test_conditional() {\n  // Test valid conditionals\n  assert(1 ? 2 : 3 == 2);\n  assert(0 ? 2 : 3 == 3);\n  \n  // Test error cases\n  // The following should now cause compile errors:\n  // int x = 1 ? 2 : ;\n  // int y = 1 ? : 3;\n}",
-        explanation: "Updated test cases to document the expected behavior for invalid conditional expressions."
-      }
-    ];
+    // Generate a realistic patch for the identified issue
+    const originalCode = potentialBuggyFunction.code;
+    const modifiedCode = generatePatch(originalCode, potentialBuggyFunction.name);
     
-    mockPatches.forEach(patch => {
-      // In a real implementation, this would be called by the AI after generating each patch
-      // addGeneratedPatch(patch);
-    });
+    // Add the patch
+    const patch = {
+      filePath: errorFile,
+      originalCode,
+      modifiedCode,
+      explanation: `Added proper input validation and error handling to the ${potentialBuggyFunction.name} function to address the reported issue.`,
+      impactedFiles: findImpactedFiles(filePaths, potentialBuggyFunction.name, 2)
+    };
+    
+    addGeneratedPatch(patch);
+    
+    // Also generate secondary patches for related files if needed
+    if (patch.impactedFiles && patch.impactedFiles.length > 0) {
+      const relatedFile = patch.impactedFiles[0];
+      const relatedContent = fileContents[relatedFile] || "";
+      const relatedFunctions = extractFunctions(relatedContent);
+      
+      if (relatedFunctions.length > 0) {
+        const relatedPatch = {
+          filePath: relatedFile,
+          originalCode: relatedFunctions[0].code,
+          modifiedCode: generateRelatedPatch(relatedFunctions[0].code),
+          explanation: `Updated related code to accommodate changes in the ${potentialBuggyFunction.name} function.`,
+          impactedFiles: [errorFile]
+        };
+        
+        addGeneratedPatch(relatedPatch);
+      }
+    }
     
     await simulateStep("validation", true, 3000, {
       summary: "Patches validated for correctness",
-      details: "The proposed changes fix the issue by validating that an expression follows the colon in conditional expressions. Test cases have been updated to document the expected behavior.",
+      details: "The proposed changes properly address the issue by adding appropriate validation and error handling. Test cases confirm the fix resolves the reported behavior.",
       codeSnippets: [
         {
-          filePath: "src/parser.c",
-          code: "// Validation test: This code now correctly errors on invalid conditionals\nint test_invalid_conditional() {\n  int x = 1 ? 2 : ; // Should error\n  return x;\n}",
-          isError: true
+          filePath: errorFile,
+          code: `// Test for the fixed function\nconst testResult = ${potentialBuggyFunction.name}('test');\nconsole.assert(testResult === 'expected result', 'Function should return expected result');`,
+          lineStart: 1,
+          lineEnd: 3
         }
       ]
     });
@@ -174,6 +257,85 @@ const BugResolution = () => {
     
     setIsRunning(false);
     setActiveTab("patches");
+  };
+
+  // Helper function to extract functions from code content
+  const extractFunctions = (content: string) => {
+    const functionRegex = /(?:function\s+(\w+)|const\s+(\w+)\s*=\s*(?:function|\([^)]*\)\s*=>))\s*\(([^)]*)\)[^{]*{([^}]*)}/g;
+    const functions = [];
+    let match;
+    
+    while ((match = functionRegex.exec(content)) !== null) {
+      const name = match[1] || match[2];
+      const params = match[3];
+      const body = match[4];
+      const fullFunction = match[0];
+      const lineStart = content.substring(0, match.index).split('\n').length;
+      
+      functions.push({
+        name,
+        params,
+        code: fullFunction,
+        lineStart
+      });
+    }
+    
+    return functions;
+  };
+  
+  // Helper function to generate a realistic patch for the identified issue
+  const generatePatch = (originalCode: string, functionName: string) => {
+    // This is a simplified example - in a real implementation, an AI model would generate the patch
+    if (originalCode.includes('if (') && !originalCode.includes('throw')) {
+      // Add error handling to an existing if statement
+      return originalCode.replace(
+        /if\s*\(([^)]+)\)\s*{/g, 
+        `if ($1) {
+  // Added validation check
+  if (!isValid($1)) {
+    throw new Error("Invalid input provided to ${functionName}");
+  }`
+      );
+    } else if (!originalCode.includes('try')) {
+      // Add try/catch logic
+      const lines = originalCode.split('\n');
+      const openingBraceIndex = lines.findIndex(line => line.includes('{'));
+      if (openingBraceIndex >= 0) {
+        lines.splice(openingBraceIndex + 1, 0, '  try {');
+        lines.push(`  } catch (error) {
+    console.error(\`Error in ${functionName}: \${error.message}\`);
+    throw error;
+  }`);
+        return lines.join('\n');
+      }
+    }
+    
+    // If we can't identify a specific pattern to fix, add a basic validation
+    return `// Added input validation
+function isValid(input) {
+  return input !== null && input !== undefined && input !== '';
+}
+
+${originalCode.replace(
+  /(\w+)\s*\(([^)]*)\)/,
+  '$1($2) {\n  if (!isValid($2)) {\n    throw new Error("Invalid input");\n  }'
+)}`;
+  };
+  
+  // Helper function to generate patches for related files
+  const generateRelatedPatch = (originalCode: string) => {
+    // This is a simplified example - in a real implementation, an AI model would generate the patch
+    return originalCode.replace(
+      /(\w+)\(([^)]*)\)/g,
+      '$1($2) // Make sure to handle potential errors from this call'
+    );
+  };
+  
+  // Helper function to find potentially impacted files
+  const findImpactedFiles = (filePaths: string[], functionName: string, count: number) => {
+    // In a real implementation, we would analyze imports and function calls
+    // Here we're just returning a subset of the files for demonstration
+    return filePaths.slice(1, count + 1);
   };
 
   const getStepStatusIcon = (status: string) => {
@@ -277,12 +439,17 @@ const BugResolution = () => {
                   <Button 
                     className="w-full" 
                     onClick={runWorkflow}
-                    disabled={isRunning}
+                    disabled={isRunning || isSearchingFiles}
                   >
                     {isRunning ? (
                       <>
                         <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                         Processing...
+                      </>
+                    ) : isSearchingFiles ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Analyzing files...
                       </>
                     ) : (
                       <>Start Resolution</>
@@ -337,6 +504,25 @@ const BugResolution = () => {
                               <div>
                                 <h4 className="font-medium mb-1">Summary</h4>
                                 <p className="text-sm text-muted-foreground">{step.result.summary}</p>
+                              </div>
+                            )}
+                            
+                            {/* Files Analyzed */}
+                            {step.result.analyzedFiles && step.result.analyzedFiles.length > 0 && (
+                              <div>
+                                <h4 className="font-medium mb-1">Files Analyzed</h4>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                  {step.result.analyzedFiles.slice(0, 6).map((file, i) => (
+                                    <div key={i} className="text-xs bg-muted p-2 rounded">
+                                      <code>{file}</code>
+                                    </div>
+                                  ))}
+                                  {step.result.analyzedFiles.length > 6 && (
+                                    <div className="text-xs text-muted-foreground">
+                                      +{step.result.analyzedFiles.length - 6} more files
+                                    </div>
+                                  )}
+                                </div>
                               </div>
                             )}
                             

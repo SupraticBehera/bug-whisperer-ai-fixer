@@ -15,6 +15,7 @@ export interface WorkflowStep {
     relatedFiles?: CodeFile[];
     rootCause?: string;
     solution?: string;
+    analyzedFiles?: string[]; // New: Files analyzed during this step
   };
   error?: string;
 }
@@ -62,6 +63,7 @@ interface WorkflowContextType {
   repository: Repository | null;
   selectedIssue: Issue | null;
   generatedPatches: CodePatch[];
+  analyzedFiles: Record<string, string>; // New: To store repository files content
   setRepository: (repo: Repository) => void;
   setSelectedIssue: (issue: Issue) => void;
   startWorkflow: () => void;
@@ -69,6 +71,8 @@ interface WorkflowContextType {
   updateStepStatus: (stepId: string, status: WorkflowStatus, result?: any, error?: string) => void;
   addGeneratedPatch: (patch: CodePatch) => void;
   resetWorkflow: () => void;
+  addAnalyzedFile: (filePath: string, content: string) => void; // New: Add a file to analyzed files
+  addManyAnalyzedFiles: (files: Record<string, string>) => void; // New: Add multiple files
 }
 
 const initialSteps: WorkflowStep[] = [
@@ -87,6 +91,7 @@ const WorkflowContext = createContext<WorkflowContextType>({
   repository: null,
   selectedIssue: null,
   generatedPatches: [],
+  analyzedFiles: {},
   setRepository: () => {},
   setSelectedIssue: () => {},
   startWorkflow: () => {},
@@ -94,6 +99,8 @@ const WorkflowContext = createContext<WorkflowContextType>({
   updateStepStatus: () => {},
   addGeneratedPatch: () => {},
   resetWorkflow: () => {},
+  addAnalyzedFile: () => {},
+  addManyAnalyzedFiles: () => {},
 });
 
 export const useWorkflow = () => useContext(WorkflowContext);
@@ -104,6 +111,7 @@ export const WorkflowProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [repository, setRepository] = useState<Repository | null>(null);
   const [selectedIssue, setSelectedIssue] = useState<Issue | null>(null);
   const [generatedPatches, setGeneratedPatches] = useState<CodePatch[]>([]);
+  const [analyzedFiles, setAnalyzedFiles] = useState<Record<string, string>>({});
 
   const startWorkflow = () => {
     // Reset steps to initial state
@@ -152,6 +160,21 @@ export const WorkflowProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setSteps(initialSteps);
     setCurrentStep("");
     setGeneratedPatches([]);
+    setAnalyzedFiles({});
+  };
+
+  const addAnalyzedFile = (filePath: string, content: string) => {
+    setAnalyzedFiles(prev => ({
+      ...prev,
+      [filePath]: content
+    }));
+  };
+
+  const addManyAnalyzedFiles = (files: Record<string, string>) => {
+    setAnalyzedFiles(prev => ({
+      ...prev,
+      ...files
+    }));
   };
 
   return (
@@ -162,6 +185,7 @@ export const WorkflowProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         repository,
         selectedIssue,
         generatedPatches,
+        analyzedFiles,
         setRepository,
         setSelectedIssue,
         startWorkflow,
@@ -169,6 +193,8 @@ export const WorkflowProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         updateStepStatus,
         addGeneratedPatch,
         resetWorkflow,
+        addAnalyzedFile,
+        addManyAnalyzedFiles,
       }}
     >
       {children}
