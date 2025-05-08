@@ -8,8 +8,28 @@ export interface WorkflowStep {
   name: string;
   status: WorkflowStatus;
   model: string;
-  result?: any;
+  result?: {
+    summary?: string;
+    details?: string;
+    codeSnippets?: CodeSnippet[];
+    relatedFiles?: CodeFile[];
+    rootCause?: string;
+    solution?: string;
+  };
   error?: string;
+}
+
+export interface CodeSnippet {
+  code: string;
+  filePath: string;
+  lineStart?: number;
+  lineEnd?: number;
+  isError?: boolean;
+}
+
+export interface CodeFile {
+  path: string;
+  content: string;
 }
 
 export interface Repository {
@@ -33,6 +53,7 @@ export interface CodePatch {
   originalCode: string;
   modifiedCode: string;
   explanation: string;
+  impactedFiles?: string[];
 }
 
 interface WorkflowContextType {
